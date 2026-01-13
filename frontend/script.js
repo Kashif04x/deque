@@ -1,17 +1,26 @@
 let cart = [];
 let walletBalance = 1000;
 let scanning = false;
+let lastScannedCode = null;   // 🔥 IMPORTANT
 
 function setStatus(msg) {
   document.getElementById("status").innerText = msg;
 }
 
-/* ---------- SCAN ---------- */
+/* ---------- START SCAN ---------- */
 function startScan() {
   if (scanning) return;
   scanning = true;
+  lastScannedCode = null; // reset for new scan
 
+  setStatus("📷 Scanning barcode...");
   const scanner = document.getElementById("scanner");
+
+  try {
+    Quagga.stop();
+    Quagga.offDetected(onDetected);
+  } catch (e) {}
+
   scanner.innerHTML = "";
 
   Quagga.init({
@@ -20,33 +29,50 @@ function startScan() {
       target: scanner,
       constraints: { facingMode: "environment" }
     },
-    decoder: { readers: ["ean_reader"] }
+    decoder: { readers: ["ean_reader"] },
+    locate: true
   }, err => {
     if (err) {
-      setStatus("Camera error");
+      setStatus("❌ Camera error");
       scanning = false;
       return;
     }
     Quagga.start();
   });
 
-  Quagga.onDetected(result => {
-    const barcode = result.codeResult.code;
-    Quagga.stop();
-    scanning = false;
+  Quagga.onDetected(onDetected);
+}
 
-    fetch(`http://localhost:3000/product/${barcode}`)
-      .then(res => res.json())
-      .then(product => {
-        if (!product) {
-          setStatus("Product not found");
-          return;
-        }
-        cart.push(product);
-        updateCart();
-        setStatus(`Added ${product.name}`);
-      });
-  });
+/* ---------- ON DETECT ---------- */
+function onDetected(result) {
+  const barcode = result.codeResult.code;
+
+  // 🔒 BLOCK DUPLICATES
+  if (barcode === lastScannedCode) return;
+  lastScannedCode = barcode;
+
+  Quagga.offDetected(onDetected);
+  Quagga.stop();
+  scanning = false;
+
+  document.getElementById("scanner").innerHTML =
+    "✅ Scan complete. Click Start Scan to scan next item.";
+
+  setStatus("✅ Scanned: " + barcode);
+
+  fetch(`http://localhost:3000/product/${barcode}`)
+    .then(res => res.json())
+    .then(product => {
+      if (!product) {
+        setStatus("❌ Product not found");
+        return;
+      }
+
+      cart.push(product);
+      updateCart();
+      setStatus(`🛒 Added ${product.name} (₹${product.price})`);
+    })
+    .catch(() => setStatus("❌ Backend not reachable"));
 }
 
 /* ---------- CART ---------- */
@@ -57,27 +83,27 @@ function updateCart() {
   list.innerHTML = "";
   let total = 0;
 
-  cart.forEach((item, i) => {
+  cart.forEach((item, index) => {
     total += item.price;
     list.innerHTML += `
       <li>
         ${item.name} - ₹${item.price}
-        <button onclick="removeItem(${i})">❌</button>
+        <button onclick="removeFromCart(${index})">❌</button>
       </li>`;
   });
 
   totalEl.innerText = total;
 }
 
-function removeItem(i) {
-  cart.splice(i, 1);
+function removeFromCart(index) {
+  cart.splice(index, 1);
   updateCart();
 }
 
 /* ---------- PAYMENT ---------- */
 function payNow() {
   if (cart.length === 0) {
-    alert("Cart empty");
+    alert("Cart is empty");
     return;
   }
 
@@ -90,14 +116,11 @@ function payNow() {
   walletBalance -= total;
   document.getElementById("balance").innerText = walletBalance;
 
-  // ✅ GENERATE QR FIRST
   generateQR(cart, total);
 
-  // ✅ THEN CLEAR CART
   cart = [];
   updateCart();
-
-  setStatus("Payment successful");
+  setStatus("💰 Payment successful");
 }
 
 /* ---------- QR ---------- */
